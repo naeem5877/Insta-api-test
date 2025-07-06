@@ -57,14 +57,36 @@ app.use((req, res, next) => {
   next();
 });
 
+// Auto-ping function to keep server alive (for free tier hosting)
+const keepAlive = () => {
+  // Only ping if we're in production and have a proper base URL
+  if (process.env.NODE_ENV === 'production' && BASE_URL && !BASE_URL.includes('localhost')) {
+    setInterval(async () => {
+      try {
+        const response = await axios.get(`${BASE_URL}/health`, {
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'VibeDownloader-KeepAlive/1.0'
+          }
+        });
+        console.log(`[Keep-Alive] Ping successful: ${response.status} - ${new Date().toISOString()}`);
+      } catch (error) {
+        console.error(`[Keep-Alive] Ping failed: ${error.message}`);
+      }
+    }, 14 * 60 * 1000); // Ping every 14 minutes (before 15-minute timeout)
+  }
+};
+
 app.get('/', (req, res) => {
   res.json({
     message: 'VibeDownloader.me API - Instagram Downloader',
     status: 'active',
     author: 'Naeem', // Optional: Add your name
+    uptime: process.uptime(),
     usage: {
         download: `${BASE_URL}/api/data?url=INSTAGRAM_POST_OR_REEL_URL`,
         example_reel: `${BASE_URL}/api/data?url=https://www.instagram.com/reel/C2sOu0sy02A/`,
+        health: `${BASE_URL}/health`,
         // Story downloads are generally less reliable with such scrapers
         // example_story_user: `${BASE_URL}/api/data?url=https://www.instagram.com/stories/instagram/`,
     }
@@ -152,8 +174,10 @@ app.get('/api/data', async (req, res) => {
       responseMedia.push({
         type: mediaType,
         quality: qualityString || 'Standard',
-        url: item.url, // Provide the direct URL as well
+        url: `${BASE_URL}/api/media/stream/${mediaId}`, // Use streaming endpoint for custom filename
+        directUrl: item.url, // Provide the direct URL as backup
         thumbnail: item.thumbnail || null,
+        filename: filename // Include custom filename
       });
     }
 
@@ -289,9 +313,34 @@ app.get('/api/media/stream/:id', async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Enhanced health check endpoint with more details
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  const userAgent = req.get('User-Agent') || 'unknown';
+  const isKeepAlive = userAgent.includes('VibeDownloader-KeepAlive');
+  
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    environment: process.env.NODE_ENV || 'development',
+    keepAlive: isKeepAlive,
+    baseUrl: BASE_URL
+  });
+  
+  // Log keep-alive pings separately
+  if (isKeepAlive) {
+    console.log(`[Keep-Alive] Health check received at ${new Date().toISOString()}`);
+  }
+});
+
+// Add a manual wake-up endpoint
+app.get('/wake', (req, res) => {
+  res.json({
+    message: 'Server is awake!',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
 });
 
 // Error handling middleware
@@ -310,4 +359,8 @@ app.listen(port, () => {
   if (BASE_URL !== `http://localhost:${port}`) {
       console.log(`Publicly accessible at: ${BASE_URL}`);
   }
+  
+  // Start the keep-alive mechanism
+  keepAlive();
+  console.log('[Keep-Alive] Auto-ping system initialized');
 });
